@@ -28,6 +28,7 @@ Y(0x188a0000__V0_SRGB__true__0x9010000__Shader,             17)
 X(BoxShadowEffect,                                          18)
 Y(BT2020_HLG__UNKNOWN__false__UNKNOWN__Shader,              19)
 X(LiquidGlassEffect,                                        20)
+X(CosGlassEffect,                                           21)
 
  // IMPORTANT: Do not change the order of existing effects in this list.
  //
