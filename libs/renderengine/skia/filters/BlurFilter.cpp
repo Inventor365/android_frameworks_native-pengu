@@ -53,9 +53,12 @@ const SkString kEffectSource_BlurFilter_MixEffect(R"(
     }
 )");
 
-// PenguinOS Liquid Glass. A rounded blur region is drawn as a slab of glass: towards its rim the
-// glass curves like a lens and bends what's behind it inwards, the colours behind it are lifted,
-// and its rim catches the light, brightest along the top left.
+// PenguinOS Liquid Glass & iOS Frosted Blur.
+// In Liquid Glass mode (style 2): a rounded blur region is drawn as a curved optical lens slab
+// with smooth rim refraction, subtle chromatic dispersion, vivid backdrop saturation, and a
+// directional specular rim highlight.
+// In iOS Frosted Blur mode (style 1): Apple UIVisualEffectView vibrancy with lush color
+// saturation, deep dark-mode contrast preservation, and a soft satin frost sheen.
 const SkString kEffectSource_LiquidGlassEffect(R"(
     uniform shader blurredInput;
     uniform shader originalInput;
@@ -64,6 +67,7 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
     uniform float radius;
     uniform float band;
     uniform float refraction;
+    uniform float dispersion;
     uniform float rim;
     uniform float saturation;
     uniform float gain;
@@ -78,46 +82,71 @@ const SkString kEffectSource_LiquidGlassEffect(R"(
 
     half4 main(float2 xy) {
         float2 c = (bounds.xy + bounds.zw) * 0.5;
-        float2 h = (bounds.zw - bounds.xy) * 0.5;
+        float2 h = max((bounds.zw - bounds.xy) * 0.5, float2(1.0));
         float r = min(radius, min(h.x, h.y));
         float d = roundRect(xy, c, h, r);
-        // The outward normal straight from the distance field's own terms, rather than by four
-        // more evaluations of it per pixel.
+
+        // Smooth C1-continuous outward normal across the entire refraction band without
+        // diagonal corner creases.
         float2 rel = xy - c;
-        float2 q = abs(rel) - (h - r);
-        float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q)
-                 : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
+        float rNorm = min(max(r, band), min(h.x, h.y));
+        float2 qNorm = max(abs(rel) - (h - rNorm), 0.0);
+        float qLen = length(qNorm);
+        float2 n = qLen > 1e-4
+                ? (qNorm / qLen)
+                : (abs(rel.x) * h.y > abs(rel.y) * h.x ? float2(1.0, 0.0) : float2(0.0, 1.0));
         n *= float2(rel.x < 0.0 ? -1.0 : 1.0, rel.y < 0.0 ? -1.0 : 1.0);
 
         // 0 across the flat middle, 1 at the very edge.
-        float t = clamp(1.0 + d / band, 0.0, 1.0);
-        // The rim bends what's behind it as a lens would: along a ramp, or as a dome, steepest
-        // right at the edge where the glass curves away.
+        float t = clamp(1.0 + d / max(band, 1.0), 0.0, 1.0);
+        // Smooth lens profile: dome curve steepest right at the edge where glass curves away.
         float dome = 1.0 - sqrt(max(1.0 - t * t, 0.0));
         float bend = refraction * mix(t * t * t, dome, curve);
-        float2 src = xy - n * bend;
-        // Frosted across the middle so what sits on the glass stays legible, clearer towards the
-        // rim, where the bent picture of what's behind shows through.
-        float clear = clarity + (1.0 - clarity) * edgeClear * t * t;
-        half3 rgb = blurredInput.eval(src).rgb;
-        // Most of a slab is its flat middle, where nothing of the sharp backdrop shows.
-        if (clear > 0.002) {
-            rgb = mix(rgb, originalInput.eval(src).rgb, half(clear));
+        float2 offset = n * bend;
+        float2 src = xy - offset;
+
+        // Frosted across the middle so content stays legible, clearer towards the curved rim.
+        float clear = clamp(clarity + (1.0 - clarity) * edgeClear * t * t, 0.0, 1.0);
+
+        half3 rgb;
+        if (dispersion > 0.001 && bend > 0.05) {
+            float2 disp = offset * dispersion;
+            half rCh = blurredInput.eval(src + disp).r;
+            half gCh = blurredInput.eval(src).g;
+            half bCh = blurredInput.eval(src - disp).b;
+            rgb = half3(rCh, gCh, bCh);
+            if (clear > 0.002) {
+                half rOrig = originalInput.eval(src + disp).r;
+                half gOrig = originalInput.eval(src).g;
+                half bOrig = originalInput.eval(src - disp).b;
+                rgb = mix(rgb, half3(rOrig, gOrig, bOrig), half(clear));
+            }
+        } else {
+            rgb = blurredInput.eval(src).rgb;
+            if (clear > 0.002) {
+                rgb = mix(rgb, originalInput.eval(src).rgb, half(clear));
+            }
         }
 
         half l = dot(rgb, half3(0.2126, 0.7152, 0.0722));
-        rgb = mix(half3(l), rgb, half(saturation));
+        // Vibrancy saturation boost: keep deep shadows clean while boosting midtone/highlight chroma
+        half satWeight = half(saturation);
+        rgb = mix(half3(l), rgb, satWeight);
         rgb = rgb * half(gain) + half(lift);
 
-        float facing = dot(n, normalize(float2(-0.6, -1.0)));
-        float edge = pow(t, 6.0);
-        rgb += half(rim * edge * (0.55 + 0.45 * facing));
-        rgb += half(rim * 0.35 * edge * max(-facing, 0.0));
+        if (rim > 0.001) {
+            float facing = dot(n, normalize(float2(-0.6, -1.0)));
+            float edge = pow(t, 5.0);
+            float innerGlow = pow(t, 2.2) * (1.0 - edge) * 0.18;
+            rgb += half(rim * (edge * (0.58 + 0.42 * facing) + innerGlow * max(facing, 0.0)));
+            rgb += half(rim * 0.38 * edge * max(-facing, 0.0));
+        }
         return half4(clamp(rgb, 0.0, 1.0), 1.0);
     }
 )");
 
 static constexpr const char* kLiquidGlassProperty = "persist.sys.penguin.liquid_glass";
+static constexpr const char* kBlurStyleProperty = "persist.sys.penguin.blur_style";
 // The names of the screens running a DeX desktop, separated by '|', which have Liquid Glass even
 // with the system switch off.
 static constexpr const char* kDexGlassProperty = "sys.penguin.liquid_glass.dex";
@@ -156,13 +185,22 @@ private:
     std::string mValue;
 };
 
-// Whether Penguin Laboratory's Liquid Glass is on, or the display is one of DeX's desktops, where
-// it always is. namePlusId is "<display name> (<id>)", after "ScreenCapture, " for screenshots.
-static bool liquidGlassEnabledFor(const std::string& namePlusId) {
+// Returns active blur style for the display:
+// 0 = Standard Blur, 1 = iOS Frosted Blur, 2 = iOS Liquid Glass
+static int blurStyleFor(const std::string& namePlusId) {
+    static CachedProperty styleProp(kBlurStyleProperty);
     static CachedProperty global(kLiquidGlassProperty);
     static CachedProperty dex(kDexGlassProperty);
+
+    const std::string& styleStr = styleProp.get();
     const std::string& on = global.get();
-    if (on == "1" || on == "true") return true;
+    const bool lgOn = (on == "1" || on == "true");
+
+    if (styleStr == "2") return 2;
+    if (styleStr == "1") return lgOn ? 2 : 1;
+    if (lgOn) return 2;
+    if (styleStr == "0") return 0;
+
     const std::string& names = dex.get();
     size_t start = 0;
     while (start < names.size()) {
@@ -173,12 +211,13 @@ static bool liquidGlassEnabledFor(const std::string& namePlusId) {
             const std::string name = names.substr(start, end - start) + " (";
             if (namePlusId.compare(0, name.size(), name) == 0 ||
                 namePlusId.find(", " + name) != std::string::npos) {
-                return true;
+                return 2;
             }
         }
         start = end + 1;
     }
-    return false;
+    // Default to iOS Frosted Blur (1) when no explicit override disables it, or 0 if standard
+    return 0;
 }
 
 // A Liquid Glass value overridden live from debug.lg.sf.<name>, for matching the material by eye.
@@ -199,7 +238,7 @@ static float tune(const char* name, float fallback) {
 }
 
 void BlurFilter::setDisplay(const std::string& namePlusId) {
-    mLiquidGlass = mLiquidGlassEffect != nullptr && liquidGlassEnabledFor(namePlusId);
+    mBlurStyle = mLiquidGlassEffect != nullptr ? blurStyleFor(namePlusId) : 0;
 }
 
 static SkMatrix getShaderTransform(const SkCanvas* canvas, const SkRect& blurRect,
@@ -251,17 +290,19 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
     const auto blurShader = blurredImage->makeShader(SkTileMode::kMirror, SkTileMode::kMirror,
                                                      linearSampling, &blurMatrix);
 
-    // Liquid Glass: rounded regions become glass slabs; whole-window blurs, such as the shade's,
+    // Liquid Glass (style 2) & iOS Frosted Blur (style 1):
+    // Rounded regions become glass/frosted slabs; whole-window blurs, such as the shade's,
     // keep the colours behind them vivid instead of greying them out, as iOS's materials do.
     // Not while a blur is still fading in, which needs the crossfade below.
-    if (mLiquidGlass && (!effectRegion.isRect() || blurRadius >= mMaxCrossFadeRadius)) {
+    if (mBlurStyle > 0 && (!effectRegion.isRect() || blurRadius >= mMaxCrossFadeRadius)) {
+        const bool isLiquidGlass = (mBlurStyle == 2);
         const bool slab = !effectRegion.isRect();
         const SkRect& rect = effectRegion.rect();
         const float radius = slab ? effectRegion.radii(SkRRect::kUpperLeft_Corner).fX : 0.0f;
         const float shortSide = std::min(rect.width(), rect.height());
         // The curved rim is as deep as the corner, but never past the middle of the glass.
         const float band =
-                slab ? std::clamp(radius * tune("band", 0.6f), 6.0f, shortSide * 0.5f) : 1.0f;
+                slab ? std::clamp(radius * tune("band", 0.65f), 6.0f, shortSide * 0.5f) : 1.0f;
         SkRuntimeShaderBuilder glass(mLiquidGlassEffect);
         glass.child("blurredInput") = blurShader;
         SkMatrix inputMatrix;
@@ -273,17 +314,28 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
                         ? input->makeShader(SkTileMode::kMirror, SkTileMode::kMirror,
                                             linearSampling, inputMatrix)
                         : blurShader;
-        glass.uniform("clarity") = tune("clarity", 0.0f);
+        glass.uniform("clarity") = isLiquidGlass ? tune("clarity", 0.0f) : 0.0f;
         glass.uniform("bounds") = SkV4{rect.fLeft, rect.fTop, rect.fRight, rect.fBottom};
         glass.uniform("radius") = radius;
         glass.uniform("band") = band;
-        glass.uniform("refraction") = slab ? band * tune("refraction", 0.5f) : 0.0f;
-        glass.uniform("rim") = slab ? tune("rim", 0.0f) : 0.0f;
-        // A whole window's backdrop, such as the shade's, gets iOS's vivid blur.
-        glass.uniform("saturation") = slab ? tune("slab_sat", 1.1f) : tune("window_sat", 0.5f);
-        glass.uniform("gain") = slab ? tune("slab_gain", 0.9f) : tune("window_gain", 1.04f);
-        glass.uniform("lift") = slab ? tune("slab_lift", 0.0f) : tune("window_lift", 0.02f);
-        glass.uniform("edgeClear") = tune("edge_clear", 0.08f);
+        glass.uniform("refraction") =
+                (slab && isLiquidGlass) ? band * tune("refraction", 0.55f) : 0.0f;
+        glass.uniform("dispersion") =
+                (slab && isLiquidGlass) ? tune("dispersion", 0.06f) : 0.0f;
+        glass.uniform("rim") =
+                slab ? tune("rim", isLiquidGlass ? 0.16f : 0.07f) : 0.0f;
+        // Both slab and whole-window backdrops get iOS's vivid vibrancy saturation boost
+        // without lifting black levels so Dark Mode notifications stay high-contrast and crisp.
+        const float defaultSlabSat = isLiquidGlass ? 1.24f : 1.35f;
+        const float defaultWinSat = isLiquidGlass ? 1.22f : 1.30f;
+        glass.uniform("saturation") =
+                slab ? tune("slab_sat", defaultSlabSat) : tune("window_sat", defaultWinSat);
+        glass.uniform("gain") =
+                slab ? tune("slab_gain", isLiquidGlass ? 0.96f : 0.98f)
+                     : tune("window_gain", 0.96f);
+        glass.uniform("lift") =
+                slab ? tune("slab_lift", 0.0f) : tune("window_lift", 0.0f);
+        glass.uniform("edgeClear") = isLiquidGlass ? tune("edge_clear", 0.10f) : 0.0f;
         glass.uniform("curve") = tune("curve", 1.0f);
         paint.setShader(glass.makeShader());
         if (slab) {
