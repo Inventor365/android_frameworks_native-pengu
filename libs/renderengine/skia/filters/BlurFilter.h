@@ -68,7 +68,7 @@ public:
 
     float getMaxCrossFadeRadius() const;
 
-    // Picks Liquid Glass, iOS Frosted Blur, or plain blur for the display about to be drawn.
+    // Picks Liquid Glass or plain blur for the display about to be drawn.
     void setDisplay(const std::string& namePlusId);
 
     virtual void preallocateBuffers(SkiaGpuContext* context, ui::Size size) {}
@@ -84,10 +84,9 @@ private:
     // Optional blend used for crossfade only if mMaxCrossFadeRadius > 0
     const sk_sp<SkRuntimeEffect> mMixEffect;
 
-    // PenguinOS Liquid Glass / iOS Frosted Blur shader effect
+    // PenguinOS Liquid Glass: rounded blur regions drawn as a lens with a lit rim
     const sk_sp<SkRuntimeEffect> mLiquidGlassEffect;
-    // 0 = Standard Blur, 1 = iOS Frosted Blur, 2 = iOS Liquid Glass
-    int mBlurStyle = 0;
+    bool mLiquidGlass = false;
 };
 
 } // namespace skia
