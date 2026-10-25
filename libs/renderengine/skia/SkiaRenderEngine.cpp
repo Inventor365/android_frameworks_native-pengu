@@ -1196,12 +1196,12 @@ void SkiaRenderEngine::drawLayersInternal(
                     }
 
                     const auto drawRegion =
-                            [this, canvas, &blurRect,
+                            [this, canvas,
                              &blurInput](const sk_sp<SkImage>& temporaryBlurredImage,
-                                         const BlurRegion& region) {
+                                         const SkRect& blurredRect, const BlurRegion& region) {
                                 mBlurFilter->drawBlurRegion(canvas, getBlurRRect(region),
                                                             region.blurRadius, 1.0f, region.alpha,
-                                                            blurRect, temporaryBlurredImage,
+                                                            blurredRect, temporaryBlurredImage,
                                                             blurInput, region.material);
                             };
 
@@ -1211,21 +1211,37 @@ void SkiaRenderEngine::drawLayersInternal(
                         regionsPerRadius.contains(layer.backgroundBlurRadius)) {
                         for (const BlurRegion& region :
                              regionsPerRadius.get(layer.backgroundBlurRadius)->get()) {
-                            drawRegion(temporaryBlurredImage, region);
+                            drawRegion(temporaryBlurredImage, blurRect, region);
                         }
                         regionsPerRadius.erase(layer.backgroundBlurRadius);
                     }
 
-                    // Draw remaining regions for each blur radius.
+                    // Draw remaining regions for each blur radius. Their blur only has to cover
+                    // the regions themselves, plus the blur radius around them so their edges
+                    // still see the content next to them. Blurring the whole layer instead costs
+                    // a full screen pass for every radius, e.g. for small Liquid Glass tiles over
+                    // a shade that blurs at a different radius.
                     for (const auto& [radius, regions] : regionsPerRadius) {
+                        SkRect regionsRect = SkRect::MakeEmpty();
+                        for (const BlurRegion& region : regions) {
+                            regionsRect.join(
+                                    canvas->getTotalMatrix().mapRect(getBlurRRect(region).rect()));
+                        }
+                        const float margin = canvas->getTotalMatrix().mapRadius(radius);
+                        regionsRect.outset(margin, margin);
+                        SkRect regionsBlurRect = blurRect;
+                        if (!regionsBlurRect.intersect(regionsRect)) {
+                            continue;
+                        }
                         {
                             SFTRACE_NAME("BlurRegion");
                             temporaryBlurredImage =
                                     mBlurFilter->generateTemporaryImage(context, display, radius,
-                                                                        blurInput, blurRect);
+                                                                        blurInput,
+                                                                        regionsBlurRect);
                         }
                         for (const BlurRegion& region : regions) {
-                            drawRegion(temporaryBlurredImage, region);
+                            drawRegion(temporaryBlurredImage, regionsBlurRect, region);
                         }
                     }
                 }
