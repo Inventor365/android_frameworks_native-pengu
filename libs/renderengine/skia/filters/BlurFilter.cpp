@@ -235,6 +235,10 @@ const SkString kEffectSource_CosGlassEffect(R"(
         } else if (mode == 5) {
             col = mix(col, luminosity(c.rgb, col), c.a);
             col = mix(col, colorDodge(c.rgb, col), c.a);
+        } else if (mode == 6) {
+            // Neutral glass retains dark/saturated content instead of washing it with grey.
+            half luminance = dot(col, half3(0.2126, 0.7152, 0.0722));
+            col *= mix(half3(1), c.rgb, c.a * smoothstep(0.2, 1.0, luminance));
         }
         return col;
     }
@@ -389,7 +393,12 @@ static const CosGlassLayers& cosGlassLayers(int32_t material) {
     static const CosGlassLayers lightHeadsUp{SkV4{5, 3, 0, 0},
                                              {argb(0x80BFBFBF), argb(0xCC333333), argb(0),
                                               argb(0)}};
+    // Explicit opt-in dock material. Keep the regular COS materials and shade unchanged.
+    static const CosGlassLayers dock{SkV4{6, 0, 0, 0},
+                                     {argb(0xFFD4D4D4), argb(0), argb(0), argb(0)}};
     switch (material) {
+        case 11:
+            return dock;
         case 2:
             return active;
         case 7:
@@ -521,8 +530,9 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
         glass.uniform("color1") = layers.colors[1];
         glass.uniform("color2") = layers.colors[2];
         glass.uniform("color3") = layers.colors[3];
-        glass.uniform("lift") = SkV4{tune("cos_gain", 1.0f), tune("cos_add", 0.0f),
-                                     tune("cos_sat", 1.0f), 0.0f};
+        glass.uniform("lift") = material == 11 ? SkV4{1.0f, 0.0f, 1.0f, 0.0f}
+                : SkV4{tune("cos_gain", 1.0f), tune("cos_add", 0.0f),
+                       tune("cos_sat", 1.0f), 0.0f};
         const SkRect& rect = effectRegion.rect();
         const float corner = effectRegion.radii(SkRRect::kUpperLeft_Corner).fX;
         float edge[16] = {};
