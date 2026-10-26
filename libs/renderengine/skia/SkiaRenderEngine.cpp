@@ -1169,9 +1169,13 @@ void SkiaRenderEngine::drawLayersInternal(
                                                                 layer.backgroundBlurRadius,
                                                                 blurInput, blurRect);
 
+                    // Only the shade's backdrop is Liquid Glass; any other window blur, such as
+                    // home's wallpaper blur while an app closes, stays a plain blur.
+                    const int32_t material =
+                            layer.name.starts_with("VRI-NotificationShade#") ? 0 : -1;
                     mBlurFilter->drawBlurRegion(canvas, bounds, layer.backgroundBlurRadius,
                                                 layer.backgroundBlurScale, 1.0f, blurRect,
-                                                temporaryBlurredImage, blurInput);
+                                                temporaryBlurredImage, blurInput, material);
                 }
 
                 if (layer.blurRegions.size()) {
