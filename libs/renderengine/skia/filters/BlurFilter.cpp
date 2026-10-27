@@ -639,7 +639,10 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
     }
 
     if (effectRegion.isRect()) {
-        if (blurAlpha == 1.0f) {
+        // Penguin's plain window blurs (material -1, such as home's while an app closes) can come
+        // out partly transparent at the screen edges; copying them with kSrc punched those edges
+        // through to black, so blend them over what is already drawn instead.
+        if (blurAlpha == 1.0f && material >= 0) {
             paint.setBlendMode(SkBlendMode::kSrc);
         }
         canvas->drawRect(effectRegion.rect(), paint);
