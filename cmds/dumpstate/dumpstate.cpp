@@ -1051,6 +1051,8 @@ static void DoKmsg() {
         /* TODO: Make last_kmsg CAP_SYSLOG protected. b/5555691 */
         DumpFile("LAST KMSG", "/proc/last_kmsg");
     }
+    // Penguin: the bootloader's log of this boot, which can say why the last one ended.
+    DumpFile("BOOTLOADER LOG", "/proc/bootloader_log");
 }
 
 static void DoKernelLogcat() {
@@ -2045,6 +2047,13 @@ Dumpstate::RunStatus Dumpstate::DumpstateDefaultAfterCritical() {
     ds.AddDir(UPDATE_ENGINE_LOG_DIR, true);
     ds.AddDir(UPDATE_ENGINE_PREF_DIR, true);
     ds.AddDir(LOGPERSIST_DATA_DIR, false);
+    // Penguin flight recorder: kernel log, system crash logs and resource use of this session
+    // and the previous one, which may have ended in a hang or a watchdog reset.
+    ds.AddDir("/data/misc_ce/0/penguin_flightlog", true);
+    // Its early-boot captures: pstore and the start-of-boot kernel log of the last few boots.
+    ds.AddDir("/data/misc/penguin_flightlog", true);
+    // Every pstore record, not only the console: panic and oops dumps of the boot before.
+    ds.AddDir("/sys/fs/pstore", false);
     if (!PropertiesHelper::IsUserBuild()) {
         ds.AddDir(PROFILE_DATA_DIR_CUR, true);
         ds.AddDir(PROFILE_DATA_DIR_REF, true);
