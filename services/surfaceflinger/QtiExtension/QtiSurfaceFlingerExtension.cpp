@@ -670,9 +670,10 @@ void QtiSurfaceFlingerExtension::qtiUpdateVsyncConfiguration() {
             qtiSetVsyncConfiguration(mQtiFlinger->mScheduler->getVsyncConfiguration_ptr());
         }
 
+        // mStateLock is already acquired at SF level in this call stack.
+        ftl::FakeGuard guard(mQtiFlinger->mStateLock);
+
         // Populate the fps supported on device in mOffsetCache
-        ConditionalLock lock(mQtiFlinger->mStateLock,
-                             std::this_thread::get_id() != mQtiFlinger->mMainThreadId);
         const auto displayOpt = mQtiFlinger->mPhysicalDisplays.get(
                 mQtiFlinger->getFrontInternalDisplayLocked()->getPhysicalId());
 
